@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------
+# Local stack: MySQL, the API, and the agent worker as a separate process.
+#
+# No passwords are baked in. Copy .env.example to .env and set DB_PASSWORD and
+# DB_ROOT_PASSWORD first - compose reads .env automatically and will refuse to
+# start without them.
+#
+#   cp .env.example .env      # then edit it
+#   docker compose up -d db
+#   docker compose run --rm api npm run migrate
+#   docker compose run --rm api npm run seed
+#   docker compose up api worker
+# ---------------------------------------------------------------------------
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${DB_NAME:-negotiation_agent}
+      MYSQL_USER: ${DB_USER:-negotiation}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    ports:
+      - '${DB_PORT:-3306}:3306'
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-u', 'root', '-p${DB_ROOT_PASSWORD}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Inside the network the database is reachable by service name, whatever
+      # .env says for running on the host.
+      DB_HOST: db
+      DB_PORT: '3306'
+    ports:
+      - '${PORT:-3000}:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ['node', 'src/index.js', 'web']
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: '3306'
+    depends_on:
+      db:
+        condition: service_healthy
+    # The agent runs in its own process: it must keep negotiating when nobody
+    # has the API open, and a slow model call must not occupy a request handler.
+    command: ['node', 'src/index.js', 'worker']
+
+volumes:
+  db_data:

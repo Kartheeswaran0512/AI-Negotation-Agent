@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Negotiation Agent",
+    "slug": "ai-negotiation-agent",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "negotiationagent",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0B0F14"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.negotiationagent"
+    },
+    "android": {
+      "package": "com.example.negotiationagent",
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+node_modules/
+coverage/
+dist/
+build/
+
+# Secrets - never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs and OS noise
+logs/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp

@@ -10,20 +10,24 @@
 import { createIntakeService } from './intakeService.js';
 import { createNegotiationService } from './negotiationService.js';
 import { createRecommendService } from './recommendService.js';
+import { createPaymentService } from './paymentService.js';
+import { createDemoService } from './demoService.js';
 
-export { createIntakeService, createNegotiationService, createRecommendService };
+export { createIntakeService, createNegotiationService, createRecommendService, createPaymentService };
 export { ValidationError } from './intakeService.js';
 export { NotFoundError, ConflictError } from './negotiationService.js';
+export { PaymentProviderError, PAYMENT_STATUS } from './paymentService.js';
 
 /**
  * @param {object} deps
  * @param {import('../repositories/types.js').Repositories} deps.repositories
  * @param {object} deps.interpreter
  * @param {object} deps.config
+ * @param {object|null} [deps.paypal]  a PayPal client, or null for no payments
  * @param {object} [deps.logger]
  * @param {() => Date} [deps.clock]
  */
-export function createServices({ repositories, interpreter, config, logger = null, clock }) {
+export function createServices({ repositories, interpreter, config, paypal = null, logger = null, clock }) {
   const recommendations = createRecommendService({ repositories, interpreter });
 
   const negotiations = createNegotiationService({
@@ -37,5 +41,21 @@ export function createServices({ repositories, interpreter, config, logger = nul
 
   const intake = createIntakeService({ repositories, interpreter });
 
-  return { intake, negotiations, recommendations };
+  const payments = createPaymentService({
+    repositories,
+    negotiations,
+    paypal,
+    config,
+    logger,
+    clock,
+  });
+
+  const demo = createDemoService({
+    services: { intake, negotiations, recommendations, payments },
+    repositories,
+    config,
+    logger,
+  });
+
+  return { intake, negotiations, recommendations, payments, demo };
 }

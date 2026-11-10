@@ -460,6 +460,14 @@ export function createNegotiationService({
     if (String(requirement.buyerId) !== String(buyerId)) {
       throw new ConflictError('only the buyer who owns this requirement can accept');
     }
+    if (negotiation.outcome === 'accepted_by_buyer') {
+      throw new ConflictError('this offer has already been accepted');
+    }
+    // One requirement, one deal. Accepting is what closes a requirement, so a
+    // closed one already has an accepted offer from another supplier.
+    if (requirement.status === 'closed') {
+      throw new ConflictError('another offer on this requirement has already been accepted');
+    }
     if (negotiation.currentSellerPriceMinor === null) {
       throw new ConflictError('there is no supplier price to accept');
     }

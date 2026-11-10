@@ -9,6 +9,7 @@ import {
   presentMessage,
   presentRun,
   presentRecommendation,
+  presentPayment,
 } from '../presenters.js';
 
 const sellerMessageBody = z.object({
@@ -86,18 +87,31 @@ export function negotiationRoutes({ services, repositories }) {
    * Acceptance. A BUYER action: it requires an identity, checks it against the
    * requirement's owner, and has no counterpart anywhere in the agent - there
    * is no tool, no action kind and no decision branch that can reach it.
+   *
+   * With PayPal configured it also opens the order, and `approveUrl` is where
+   * to send the buyer to pay. Calling it again before they have paid returns
+   * the same order. Without PayPal, `payment` and `approveUrl` are null.
    */
   router.post('/:id/accept', requireUser, async (req, res) => {
     const { currency } = await loadContext(req.params.id);
-    const result = await services.negotiations.accept({
+    const result = await services.payments.checkout({
       negotiationId: req.params.id,
       buyerId: req.userId,
     });
+    const payment = presentPayment(result.payment);
     res.json({
       ok: true,
       accepted: true,
       message: presentMessage(result.message, currency),
+      payment,
+      approveUrl: payment?.approve_url ?? null,
     });
+  });
+
+  router.get('/:id/payment', async (req, res) => {
+    const { negotiation } = await loadContext(req.params.id);
+    const payment = await services.payments.forNegotiation(negotiation.id);
+    res.json({ ok: true, payment: presentPayment(payment) });
   });
 
   return router;

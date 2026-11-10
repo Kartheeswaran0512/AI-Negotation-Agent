@@ -37,6 +37,7 @@ export function createMemoryRepositories() {
     agentRuns: new Map(),
     recommendations: new Map(),
     outbox: new Map(),
+    payments: new Map(),
   };
 
   const sequences = {
@@ -48,6 +49,7 @@ export function createMemoryRepositories() {
     agentRuns: 0,
     recommendations: 0,
     outbox: 0,
+    payments: 0,
   };
 
   const nextId = (table) => (sequences[table] += 1);
@@ -337,7 +339,81 @@ export function createMemoryRepositories() {
     },
   };
 
+  const payments = {
+    /** The same answer MySQL's two UNIQUE keys give: the existing row, not a second one. */
+    async create(payment) {
+      const existing = [...state.payments.values()].find(
+        (row) =>
+          String(row.negotiationId) === String(payment.negotiationId) ||
+          row.providerOrderId === payment.providerOrderId,
+      );
+      if (existing) return { created: false, payment: clone(existing) };
+
+      const row = {
+        id: nextId('payments'),
+        negotiationId: payment.negotiationId,
+        provider: payment.provider ?? 'paypal',
+        providerOrderId: payment.providerOrderId,
+        createdVia: payment.createdVia ?? 'rest',
+        status: payment.status ?? 'CREATED',
+        amountMinor: payment.amountMinor,
+        currency: payment.currency,
+        dealAmountMinor: payment.dealAmountMinor,
+        dealCurrency: payment.dealCurrency,
+        approveUrl: payment.approveUrl ?? null,
+        captureId: null,
+        invoiceId: null,
+        invoiceStatus: null,
+        invoiceVia: null,
+        invoiceError: null,
+        invoiceAttemptedAt: null,
+        createdAt: new Date(),
+        paidAt: null,
+      };
+      state.payments.set(row.id, row);
+      return { created: true, payment: clone(row) };
+    },
+    async findById(id) {
+      return clone(state.payments.get(Number(id))) ?? null;
+    },
+    async findByNegotiation(negotiationId) {
+      for (const row of state.payments.values()) {
+        if (String(row.negotiationId) === String(negotiationId)) return clone(row);
+      }
+      return null;
+    },
+    async findByOrderId(orderId) {
+      for (const row of state.payments.values()) {
+        if (row.providerOrderId === orderId) return clone(row);
+      }
+      return null;
+    },
+    async recordCapture(id, { status, captureId = null, paidAt = null }) {
+      const row = state.payments.get(Number(id));
+      if (!row) return null;
+      if (row.status === 'CREATED') Object.assign(row, { status, captureId, paidAt });
+      return clone(row);
+    },
+    async recordInvoice(id, { invoiceId, invoiceStatus = null, invoiceVia = null }) {
+      const row = state.payments.get(Number(id));
+      if (!row) return null;
+      if (row.invoiceId === null) {
+        Object.assign(row, { invoiceId, invoiceStatus, invoiceVia, invoiceError: null, invoiceAttemptedAt: new Date() });
+      }
+      return clone(row);
+    },
+    async recordInvoiceError(id, { message, at = new Date() }) {
+      const row = state.payments.get(Number(id));
+      if (!row) return null;
+      if (row.invoiceId === null) {
+        Object.assign(row, { invoiceError: String(message).slice(0, 500), invoiceAttemptedAt: at });
+      }
+      return clone(row);
+    },
+  };
+
   return {
+    kind: 'memory',
     users,
     requirements,
     negotiations,
@@ -346,6 +422,7 @@ export function createMemoryRepositories() {
     agentRuns,
     recommendations,
     outbox,
+    payments,
     async close() {
       for (const table of Object.keys(state)) state[table].clear();
     },

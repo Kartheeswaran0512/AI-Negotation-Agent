@@ -15,6 +15,7 @@
  * the bottom, which both implementations use.
  *
  * @typedef {object} Repositories
+ * @property {'mysql'|'memory'} kind  which store this is, for /health
  * @property {UserRepo} users
  * @property {RequirementRepo} requirements
  * @property {NegotiationRepo} negotiations
@@ -23,6 +24,7 @@
  * @property {AgentRunRepo} agentRuns
  * @property {RecommendationRepo} recommendations
  * @property {OutboxRepo} outbox
+ * @property {PaymentRepo} payments
  * @property {() => Promise<void>} close
  *
  * @typedef {object} UserRepo
@@ -66,6 +68,23 @@
  * @property {(id: number|string, messageId: number|string) => Promise<void>} markSent
  * @property {(id: number|string, error: string) => Promise<void>} markFailed
  * @property {(key: string) => Promise<object|null>} findByKey
+ *
+ * One payment per negotiation and per provider order. `create` on either key
+ * that is already taken returns the existing row with `created: false` - the
+ * outbox's answer to a race, not an error. `recordCapture` moves a payment out
+ * of CREATED exactly once; on any other status it changes nothing.
+ *
+ * @typedef {object} PaymentRepo
+ * @property {(payment: object) => Promise<{created: boolean, payment: object}>} create
+ * @property {(id: number|string) => Promise<object|null>} findById
+ * @property {(negotiationId: number|string) => Promise<object|null>} findByNegotiation
+ * @property {(orderId: string) => Promise<object|null>} findByOrderId
+ * @property {(id: number|string, capture: {status: string, captureId?: string|null, paidAt?: Date|null}) => Promise<object|null>} recordCapture
+ * @property {(id: number|string, invoice: {invoiceId: string, invoiceStatus?: string|null, invoiceVia?: string|null}) => Promise<object|null>} recordInvoice
+ *   Sets the invoice once; a payment that already has one is returned unchanged.
+ *   Clears any recorded invoice error.
+ * @property {(id: number|string, failure: {message: string, at?: Date}) => Promise<object|null>} recordInvoiceError
+ *   Records why the last invoice attempt failed. Ignored once an invoice exists.
  */
 
 /** The states in which the worker should look at a negotiation again. */

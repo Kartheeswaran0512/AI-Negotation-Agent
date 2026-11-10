@@ -290,6 +290,125 @@ function contractSuite(label, makeStore, teardown = async () => {}) {
       expect(await repositories.messages.countAgentSince(since)).toBe(1);
     });
 
+    const paymentFor = (negotiation, overrides = {}) => ({
+      negotiationId: negotiation.id,
+      provider: 'paypal',
+      providerOrderId: `ORDER-${negotiation.id}-${Math.random().toString(36).slice(2, 8)}`,
+      amountMinor: 67059,
+      currency: 'USD',
+      dealAmountMinor: 5_700_000,
+      dealCurrency: 'INR',
+      approveUrl: 'https://www.sandbox.paypal.com/checkoutnow?token=X',
+      ...overrides,
+    });
+
+    test('payments keep exact amounts and are found by negotiation and by order', async () => {
+      const { negotiation } = await fixture();
+      const { created, payment } = await repositories.payments.create(paymentFor(negotiation));
+
+      expect(created).toBe(true);
+      expect(payment.status).toBe('CREATED');
+      expect(payment.amountMinor).toBe(67059);
+      expect(payment.dealAmountMinor).toBe(5_700_000);
+
+      const byNegotiation = await repositories.payments.findByNegotiation(negotiation.id);
+      const byOrder = await repositories.payments.findByOrderId(payment.providerOrderId);
+      expect(String(byNegotiation.id)).toBe(String(payment.id));
+      expect(String(byOrder.id)).toBe(String(payment.id));
+      expect(await repositories.payments.findByOrderId('NO-SUCH-ORDER')).toBeNull();
+    });
+
+    test('ONE PAYMENT PER NEGOTIATION - a second create returns the first', async () => {
+      const { negotiation } = await fixture();
+      const results = await Promise.all([
+        repositories.payments.create(paymentFor(negotiation)),
+        repositories.payments.create(paymentFor(negotiation)),
+        repositories.payments.create(paymentFor(negotiation)),
+      ]);
+
+      expect(results.filter((result) => result.created)).toHaveLength(1);
+      const ids = new Set(results.map((result) => String(result.payment.id)));
+      expect(ids.size).toBe(1);
+    });
+
+    test('a capture is recorded once, and only from CREATED', async () => {
+      const { negotiation } = await fixture();
+      const { payment } = await repositories.payments.create(paymentFor(negotiation));
+      const paidAt = new Date('2026-11-10T10:00:00.000Z');
+
+      const paid = await repositories.payments.recordCapture(payment.id, {
+        status: 'PAID',
+        captureId: 'CAP-1',
+        paidAt,
+      });
+      expect(paid.status).toBe('PAID');
+      expect(paid.captureId).toBe('CAP-1');
+      expect(new Date(paid.paidAt).getTime()).toBe(paidAt.getTime());
+
+      const again = await repositories.payments.recordCapture(payment.id, {
+        status: 'FAILED',
+        captureId: 'CAP-2',
+      });
+      expect(again.status).toBe('PAID');
+      expect(again.captureId).toBe('CAP-1');
+    });
+
+    test('a payment remembers which PayPal path created it', async () => {
+      const { negotiation } = await fixture();
+      const { payment } = await repositories.payments.create(paymentFor(negotiation, { createdVia: 'toolkit' }));
+      expect(payment.createdVia).toBe('toolkit');
+      expect(payment.invoiceId).toBeNull();
+
+      const other = await fixture();
+      const plain = await repositories.payments.create(paymentFor(other.negotiation));
+      expect(plain.payment.createdVia).toBe('rest');
+    });
+
+    test('an invoice is recorded once, and a second one never replaces it', async () => {
+      const { negotiation } = await fixture();
+      const { payment } = await repositories.payments.create(paymentFor(negotiation));
+
+      const first = await repositories.payments.recordInvoice(payment.id, {
+        invoiceId: `INV2-${negotiation.id}-A`,
+        invoiceStatus: 'DRAFT',
+        invoiceVia: 'toolkit',
+      });
+      expect(first).toMatchObject({ invoiceId: `INV2-${negotiation.id}-A`, invoiceStatus: 'DRAFT', invoiceVia: 'toolkit' });
+
+      const second = await repositories.payments.recordInvoice(payment.id, {
+        invoiceId: `INV2-${negotiation.id}-B`,
+        invoiceStatus: 'SENT',
+        invoiceVia: 'rest',
+      });
+      expect(second.invoiceId).toBe(`INV2-${negotiation.id}-A`);
+      expect(second.invoiceVia).toBe('toolkit');
+    });
+
+    test('an invoice failure is kept until an invoice exists, and then cleared for good', async () => {
+      const { negotiation } = await fixture();
+      const { payment } = await repositories.payments.create(paymentFor(negotiation));
+      const at = new Date('2026-11-10T07:45:28.000Z');
+
+      const failed = await repositories.payments.recordInvoiceError(payment.id, { message: '403 NOT_AUTHORIZED', at });
+      expect(failed.invoiceError).toBe('403 NOT_AUTHORIZED');
+      expect(new Date(failed.invoiceAttemptedAt).getTime()).toBe(at.getTime());
+
+      const invoiced = await repositories.payments.recordInvoice(payment.id, {
+        invoiceId: `INV2-${negotiation.id}-OK`,
+        invoiceStatus: 'DRAFT',
+        invoiceVia: 'rest',
+      });
+      expect(invoiced.invoiceError).toBeNull();
+
+      const late = await repositories.payments.recordInvoiceError(payment.id, { message: 'late failure' });
+      expect(late.invoiceError).toBeNull();
+      expect(late.invoiceId).toBe(`INV2-${negotiation.id}-OK`);
+    });
+
+    test('says which store it is', () => {
+      expect(repositories.kind).toBe(label);
+    });
+
     test('MESSAGES ARE APPEND ONLY - there is no update or delete method', () => {
       expect(repositories.messages.update).toBeUndefined();
       expect(repositories.messages.delete).toBeUndefined();
@@ -328,6 +447,7 @@ if (runDbTests) {
       try {
         await connection.query('SET FOREIGN_KEY_CHECKS = 0');
         for (const table of [
+          'payments',
           'outbox',
           'recommendations',
           'agent_runs',

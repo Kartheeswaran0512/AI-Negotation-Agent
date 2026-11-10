@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-export function healthRoutes({ config, interpreter }) {
+export function healthRoutes({ config, interpreter, repositories = null }) {
   const router = Router();
 
   router.get('/health', (_req, res) => {
@@ -8,6 +8,8 @@ export function healthRoutes({ config, interpreter }) {
       ok: true,
       service: 'ai-negotiation-agent',
       env: config.env,
+      // The store actually in use. `memory` forgets everything on restart.
+      store: repositories?.kind ?? config.store,
       llm: {
         provider: interpreter.provider,
         model: interpreter.model,
@@ -21,6 +23,11 @@ export function healthRoutes({ config, interpreter }) {
         dry_run: config.agent.dryRun,
         max_rounds: config.agent.maxRounds,
       },
+      payments: {
+        paypal: config.paypal.enabled,
+        env: config.paypal.enabled ? config.paypal.env : null,
+      },
+      demo: { enabled: config.demo.enabled },
     });
   });
 

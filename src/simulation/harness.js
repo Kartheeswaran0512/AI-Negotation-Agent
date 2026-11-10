@@ -12,8 +12,10 @@ import { silentLogger } from '../config/logger.js';
 import { createMemoryRepositories } from '../repositories/memoryRepositories.js';
 import { createInterpreter, createRulesAdapter } from '../llm/index.js';
 import { createContainer } from '../container.js';
-import { isTerminal } from '../domain/machine.js';
 import { toMinor } from '../domain/money.js';
+import { DEFAULT_REQUIREMENT, playAgainst } from './play.js';
+
+export { DEFAULT_REQUIREMENT };
 
 /**
  * A deterministic configuration that needs no environment and no API key.
@@ -24,6 +26,7 @@ export function simulationConfig(overrides = {}) {
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
     API_KEY: 'simulation-key',
+    STORE: 'memory',
     LLM_PROVIDER: 'rules',
     AGENT_ENABLED: 'true',
     AGENT_DRY_RUN: 'false',
@@ -38,8 +41,9 @@ export function simulationConfig(overrides = {}) {
  * @param {object} [options]
  * @param {Record<string,string>} [options.configOverrides]
  * @param {object} [options.interpreter] inject a different interpreter
+ * @param {object} [options.paypal]      inject a PayPal stub; payments are off without one
  */
-export async function createWorld({ configOverrides = {}, interpreter } = {}) {
+export async function createWorld({ configOverrides = {}, interpreter, paypal = null } = {}) {
   const config = simulationConfig(configOverrides);
   const repositories = createMemoryRepositories();
 
@@ -48,6 +52,7 @@ export async function createWorld({ configOverrides = {}, interpreter } = {}) {
     repositories,
     interpreter:
       interpreter ?? createInterpreter({ llm: createRulesAdapter(), timeoutMs: 2000 }),
+    paypalClient: paypal,
     logger: silentLogger,
   });
 
@@ -59,17 +64,6 @@ export async function createWorld({ configOverrides = {}, interpreter } = {}) {
 
   return { ...container, buyer };
 }
-
-/** The example requirement from the project brief. */
-export const DEFAULT_REQUIREMENT = Object.freeze({
-  product: 'wireless earbuds',
-  quantity: 100,
-  unit: 'pieces',
-  currency: 'INR',
-  target: '600',
-  max: '700',
-  basis: 'per_unit',
-});
 
 /**
  * Play one negotiation against one simulated supplier.
@@ -112,42 +106,13 @@ export async function playNegotiation({
     sellerId: sellerUser.id,
   });
 
-  const ticks = [];
-
-  for (let index = 0; index < maxTicks; index += 1) {
-    const before = await repositories.negotiations.findById(negotiation.id);
-    if (isTerminal(before.state)) break;
-
-    const result = await services.negotiations.tick({
-      negotiationId: negotiation.id,
-      triggerSource: 'simulation',
-    });
-
-    ticks.push({
-      action: result.action.kind,
-      reason: result.action.reason,
-      state: result.state,
-      sent: Boolean(result.message),
-      body: result.message?.body ?? null,
-      generatedBy: result.generatedBy,
-    });
-
-    if (result.message) {
-      const reply = seller.reply({ round: before.round, agentMessage: result.message });
-      if (reply) {
-        await services.negotiations.recordSellerMessage({
-          negotiationId: negotiation.id,
-          body: reply,
-        });
-        continue;
-      }
-      // A silent supplier: one more tick would only re-hold.
-      break;
-    }
-
-    // Nothing was sent and nothing new arrived - another tick changes nothing.
-    if (result.action.kind === 'hold') break;
-  }
+  const ticks = await playAgainst({
+    services,
+    repositories,
+    negotiationId: negotiation.id,
+    seller,
+    maxTicks,
+  });
 
   const final = await repositories.negotiations.findById(negotiation.id);
   const messages = await repositories.messages.listByNegotiation(negotiation.id);

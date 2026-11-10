@@ -8,6 +8,7 @@
  */
 
 import { fromMinor, formatMoney } from '../domain/money.js';
+import { explainRun } from '../domain/explain.js';
 
 export function money(minor, currency) {
   if (minor === null || minor === undefined) return null;
@@ -74,6 +75,110 @@ export function presentRun(run, currency = 'INR') {
     latency_ms: run.latencyMs,
     detail: run.detail,
     created_at: run.createdAt,
+  };
+}
+
+/**
+ * `amount` is what PayPal charges; `deal_amount` is the agreed total in the
+ * requirement's own currency. The approval link is only offered while there is
+ * still something to approve.
+ */
+export function presentPayment(payment) {
+  if (!payment) return null;
+  return {
+    id: payment.id,
+    negotiation_id: payment.negotiationId,
+    provider: payment.provider,
+    order_id: payment.providerOrderId,
+    status: payment.status,
+    amount: money(payment.amountMinor, payment.currency),
+    currency: payment.currency,
+    deal_amount: money(payment.dealAmountMinor, payment.dealCurrency),
+    deal_currency: payment.dealCurrency,
+    approve_url: payment.status === 'CREATED' ? payment.approveUrl : null,
+    capture_id: payment.captureId,
+    // 'rest' or 'toolkit' (@paypal/agent-toolkit).
+    created_via: payment.createdVia ?? 'rest',
+    invoice: payment.invoiceId
+      ? { id: payment.invoiceId, status: payment.invoiceStatus, via: payment.invoiceVia }
+      : null,
+    // Why a paid deal has no invoice yet - the last refusal, kept so it can be
+    // seen without the server logs.
+    invoice_error:
+      !payment.invoiceId && payment.invoiceError
+        ? { message: payment.invoiceError, attempted_at: payment.invoiceAttemptedAt ?? null }
+        : null,
+    created_at: payment.createdAt,
+    paid_at: payment.paidAt,
+  };
+}
+
+/**
+ * One agent_runs row as "why the agent did this", for the buyer-facing card.
+ * Deliberately narrower than presentRun: no raw detail, no counter_price -
+ * only what explainRun lets through, which never includes the buyer's target
+ * or maximum.
+ */
+export function presentRunWhy(run, limits) {
+  const why = explainRun(run, limits);
+  return {
+    id: run.id,
+    action: run.action,
+    reason: run.reason,
+    headline: why.headline,
+    detail: why.detail,
+    notes: why.notes,
+    supplier_price: money(why.supplierPriceMinor, limits.currency),
+    agent_offer: money(why.agentOfferMinor, limits.currency),
+    state_before: run.stateBefore,
+    state_after: run.stateAfter,
+    created_at: run.createdAt,
+  };
+}
+
+/**
+ * A demo run, one entry per supplier. "Savings" is the supplier's opening quote
+ * minus the price the negotiation ended at - what the agent talked them down.
+ */
+export function presentDemoRun({ requirement, limits, recommendation, suppliers }) {
+  const currency = requirement.currency;
+  return {
+    requirement: presentRequirement(requirement),
+    target_per_unit: money(limits.targetMinor, currency),
+    max_per_unit: money(limits.maxMinor, currency),
+    recommendation: presentRecommendation(recommendation, currency),
+    suppliers: suppliers.map((s) => ({
+      negotiation_id: s.negotiation.id,
+      supplier: {
+        name: s.seller?.name ?? null,
+        company: s.seller?.company ?? null,
+        description: s.description,
+      },
+      state: s.negotiation.state,
+      outcome: s.negotiation.outcome,
+      round: s.negotiation.round,
+      max_rounds: s.negotiation.maxRounds,
+      opening_price: money(s.openingMinor, currency),
+      final_price: money(s.finalMinor, currency),
+      savings_per_unit: money(s.savingsPerUnitMinor, currency),
+      savings_total: money(s.savingsTotalMinor, currency),
+      savings_percent:
+        s.openingMinor && s.savingsPerUnitMinor !== null
+          ? Math.round((s.savingsPerUnitMinor * 1000) / s.openingMinor) / 10
+          : null,
+      order_total: money(s.orderTotalMinor, currency),
+      within_budget: s.withinBudget,
+      meets_target: s.meetsTarget,
+      recommended: s.recommended,
+      accepted: s.negotiation.outcome === 'accepted_by_buyer',
+      held_because: s.heldBecause,
+      payment: presentPayment(s.payment),
+      transcript: s.messages.map((m) => ({
+        author: m.author,
+        body: m.body,
+        price: money(m.priceMinor, currency),
+      })),
+    })),
   };
 }
 

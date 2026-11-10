@@ -344,7 +344,85 @@ export function createMysqlRepositories(pool) {
     },
   };
 
+  const payments = {
+    /** UNIQUE on negotiation and on order id: a losing racer gets the winner's row. */
+    async create(payment) {
+      try {
+        const [result] = await pool.execute(
+          `INSERT INTO payments
+             (negotiation_id, provider, provider_order_id, created_via, status, amount, currency,
+              deal_amount, deal_currency, approve_url)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            payment.negotiationId,
+            payment.provider ?? 'paypal',
+            payment.providerOrderId,
+            payment.createdVia ?? 'rest',
+            payment.status ?? 'CREATED',
+            toMoney(payment.amountMinor),
+            payment.currency,
+            toMoney(payment.dealAmountMinor),
+            payment.dealCurrency,
+            payment.approveUrl ?? null,
+          ],
+        );
+        return { created: true, payment: await payments.findById(result.insertId) };
+      } catch (error) {
+        if (error && error.code === 'ER_DUP_ENTRY') {
+          const existing =
+            (await payments.findByNegotiation(payment.negotiationId)) ??
+            (await payments.findByOrderId(payment.providerOrderId));
+          return { created: false, payment: existing };
+        }
+        throw error;
+      }
+    },
+    async findById(id) {
+      const [rows] = await pool.execute('SELECT * FROM payments WHERE id = ?', [id]);
+      return rows.length ? mapPayment(rows[0]) : null;
+    },
+    async findByNegotiation(negotiationId) {
+      const [rows] = await pool.execute('SELECT * FROM payments WHERE negotiation_id = ?', [
+        negotiationId,
+      ]);
+      return rows.length ? mapPayment(rows[0]) : null;
+    },
+    async findByOrderId(orderId) {
+      const [rows] = await pool.execute('SELECT * FROM payments WHERE provider_order_id = ?', [
+        orderId,
+      ]);
+      return rows.length ? mapPayment(rows[0]) : null;
+    },
+    async recordCapture(id, { status, captureId = null, paidAt = null }) {
+      await pool.execute(
+        `UPDATE payments SET status = ?, capture_id = ?, paid_at = ?
+          WHERE id = ? AND status = 'CREATED'`,
+        [status, captureId, paidAt, id],
+      );
+      return payments.findById(id);
+    },
+    async recordInvoice(id, { invoiceId, invoiceStatus = null, invoiceVia = null }) {
+      await pool.execute(
+        `UPDATE payments
+            SET invoice_id = ?, invoice_status = ?, invoice_via = ?,
+                invoice_error = NULL, invoice_attempted_at = CURRENT_TIMESTAMP(3)
+          WHERE id = ? AND invoice_id IS NULL`,
+        [invoiceId, invoiceStatus, invoiceVia, id],
+      );
+      return payments.findById(id);
+    },
+    async recordInvoiceError(id, { message, at = new Date() }) {
+      await pool.execute(
+        `UPDATE payments SET invoice_error = ?, invoice_attempted_at = ?
+          WHERE id = ? AND invoice_id IS NULL`,
+        [String(message).slice(0, 500), at, id],
+      );
+      return payments.findById(id);
+    },
+  };
+
   return {
+    kind: 'mysql',
     users,
     requirements,
     negotiations,
@@ -353,6 +431,7 @@ export function createMysqlRepositories(pool) {
     agentRuns,
     recommendations,
     outbox,
+    payments,
     async close() {
       await pool.end();
     },
@@ -487,6 +566,30 @@ function mapRecommendation(row) {
     priceMinor: fromMoney(row.price),
     summary: row.summary,
     createdAt: row.created_at,
+  };
+}
+
+function mapPayment(row) {
+  return {
+    id: row.id,
+    negotiationId: row.negotiation_id,
+    provider: row.provider,
+    providerOrderId: row.provider_order_id,
+    createdVia: row.created_via,
+    status: row.status,
+    amountMinor: fromMoney(row.amount),
+    currency: row.currency,
+    dealAmountMinor: fromMoney(row.deal_amount),
+    dealCurrency: row.deal_currency,
+    approveUrl: row.approve_url,
+    captureId: row.capture_id,
+    invoiceId: row.invoice_id,
+    invoiceStatus: row.invoice_status,
+    invoiceVia: row.invoice_via,
+    invoiceError: row.invoice_error,
+    invoiceAttemptedAt: row.invoice_attempted_at,
+    createdAt: row.created_at,
+    paidAt: row.paid_at,
   };
 }
 

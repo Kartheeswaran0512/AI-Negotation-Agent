@@ -2,6 +2,7 @@
   "name": "ai-negotiation-agent",
   "version": "1.0.0",
   "description": "An AI-powered buyer-seller negotiation agent. Deterministic decisions, LLM language layer.",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "engines": {
